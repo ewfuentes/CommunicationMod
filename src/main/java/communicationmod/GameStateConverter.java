@@ -224,6 +224,37 @@ public class GameStateConverter {
             }
             state.put("body_text", "");
         }
+        // For Board Game Neow, include reward type and drawback on each option.
+        // The options list may have non-blessing options before the blessings
+        // (e.g., "Choose a Card"), so offset by the difference in list sizes.
+        if (event.getClass().getName().equals("BoardGame.neow.BGNeowEvent")) {
+            try {
+                Field rewardsField = event.getClass().getDeclaredField("rewards");
+                rewardsField.setAccessible(true);
+                java.util.List<?> rewards = (java.util.List<?>) rewardsField.get(event);
+                int offset = options.size() - rewards.size();
+                for (int i = 0; i < rewards.size(); i++) {
+                    int optIdx = i + offset;
+                    if (optIdx < 0 || optIdx >= options.size()) continue;
+                    Object reward = rewards.get(i);
+                    Field typeField = reward.getClass().getDeclaredField("type");
+                    typeField.setAccessible(true);
+                    Field drawbackField = reward.getClass().getDeclaredField("drawback");
+                    drawbackField.setAccessible(true);
+                    Object rewardType = typeField.get(reward);
+                    Object drawback = drawbackField.get(reward);
+                    HashMap<String, Object> optionMap = (HashMap<String, Object>) options.get(optIdx);
+                    if (rewardType != null) {
+                        optionMap.put("reward_type", rewardType.toString());
+                    }
+                    if (drawback != null) {
+                        optionMap.put("drawback", drawback.toString());
+                    }
+                }
+            } catch (Exception e) {
+                // Neow rewards not available (e.g., Talk screen)
+            }
+        }
         state.put("event_name", ReflectionHacks.getPrivateStatic(event.getClass(), "NAME"));
         if (event instanceof NeowEvent) {
             state.put("event_id", "Neow Event");
