@@ -462,6 +462,14 @@ public class GameStateConverter {
         return state;
     }
 
+    private static HashMap<String, Object> getCustomScreenState() {
+        HashMap<String, Object> state = new HashMap<>();
+        state.put("screen_enum", AbstractDungeon.screen.name());
+        ArrayList<String> choiceList = ChoiceScreenUtils.getCurrentChoiceList();
+        state.put("choices", choiceList);
+        return state;
+    }
+
     /**
      * Gets the appropriate screen state object
      * @return An object containing your current screen state
@@ -490,6 +498,8 @@ public class GameStateConverter {
                 return getHandSelectState();
             case GAME_OVER:
                 return getGameOverState();
+            case CUSTOM_SCREEN:
+                return getCustomScreenState();
         }
         return new HashMap<>();
     }
@@ -840,6 +850,12 @@ public class GameStateConverter {
         jsonRelic.put("id", relic.relicId);
         jsonRelic.put("name", relic.name);
         jsonRelic.put("counter", relic.counter);
+        boolean isClickable = relic instanceof com.evacipated.cardcrawl.mod.stslib.relics.ClickableRelic;
+        jsonRelic.put("clickable", isClickable);
+        if (isClickable) {
+            boolean pulsing = (boolean) ReflectionHacks.getPrivate(relic, AbstractRelic.class, "pulse");
+            jsonRelic.put("pulsing", pulsing);
+        }
         return jsonRelic;
     }
 

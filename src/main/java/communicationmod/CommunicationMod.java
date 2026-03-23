@@ -131,6 +131,11 @@ public class CommunicationMod implements PostInitializeSubscriber, PostUpdateSub
         if(!mustSendGameState && GameStateListener.checkForMenuStateChange()) {
             mustSendGameState = true;
         }
+        // Also check for dungeon state changes here, since receivePostDungeonUpdate
+        // may not fire for custom screens that open before the dungeon loop starts.
+        if(!mustSendGameState && CommandExecutor.isInDungeon() && GameStateListener.checkForDungeonStateChange()) {
+            mustSendGameState = true;
+        }
         if(mustSendGameState) {
             publishOnGameStateChange();
             mustSendGameState = false;

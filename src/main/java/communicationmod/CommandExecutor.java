@@ -20,6 +20,7 @@ import com.megacrit.cardcrawl.potions.PotionSlot;
 import com.megacrit.cardcrawl.random.Random;
 import com.megacrit.cardcrawl.relics.AbstractRelic;
 import com.megacrit.cardcrawl.rooms.*;
+import com.evacipated.cardcrawl.mod.stslib.relics.ClickableRelic;
 import communicationmod.patches.InputActionPatch;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -31,6 +32,7 @@ public class CommandExecutor {
     private static final Logger logger = LogManager.getLogger(CommandExecutor.class.getName());
 
     public static boolean executeCommand(String command) throws InvalidCommandException {
+        String originalCommand = command;
         command = command.toLowerCase();
         String [] tokens = command.split("\\s+");
         if(tokens.length == 0) {
@@ -39,7 +41,7 @@ public class CommandExecutor {
         if (!isCommandAvailable(tokens[0])) {
             throw new InvalidCommandException("Invalid command: " + tokens[0] + ". Possible commands: " + getAvailableCommands());
         }
-        String command_tail = command.substring(tokens[0].length());
+        String command_tail = originalCommand.substring(tokens[0].length());
         switch(tokens[0]) {
             case "play":
                 executePlayCommand(tokens);
@@ -78,6 +80,12 @@ public class CommandExecutor {
             case "wait":
                 executeWaitCommand(tokens);
                 return true;
+            case "debug":
+                executeDebugCommand(command_tail.trim());
+                return true;
+            case "relic":
+                executeRelicCommand(tokens);
+                return true;
 
             default:
                 logger.info("This should never happen.");
@@ -112,6 +120,10 @@ public class CommandExecutor {
             availableCommands.add("key");
             availableCommands.add("click");
             availableCommands.add("wait");
+            availableCommands.add("debug");
+            if (hasClickableRelics()) {
+                availableCommands.add("relic");
+            }
         }
         availableCommands.add("state");
         return availableCommands;
@@ -466,6 +478,59 @@ public class CommandExecutor {
             throw new InvalidCommandException(tokens, InvalidCommandException.InvalidCommandFormat.OUT_OF_BOUNDS, tokens[1]);
         }
         GameStateListener.setTimeout(timeout);
+    }
+
+    private static boolean hasClickableRelics() {
+        if (!isInDungeon()) return false;
+        for (AbstractRelic relic : AbstractDungeon.player.relics) {
+            if (relic instanceof ClickableRelic) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void executeRelicCommand(String[] tokens) throws InvalidCommandException {
+        // Usage: relic <index>
+        // Triggers onRightClick() on the relic at the given index among clickable relics
+        if (tokens.length < 2) {
+            throw new InvalidCommandException(tokens, InvalidCommandException.InvalidCommandFormat.MISSING_ARGUMENT);
+        }
+        int index;
+        try {
+            index = Integer.parseInt(tokens[1]);
+        } catch (NumberFormatException e) {
+            throw new InvalidCommandException(tokens, InvalidCommandException.InvalidCommandFormat.INVALID_ARGUMENT, tokens[1]);
+        }
+        java.util.ArrayList<AbstractRelic> clickable = new java.util.ArrayList<>();
+        for (AbstractRelic relic : AbstractDungeon.player.relics) {
+            if (relic instanceof ClickableRelic) {
+                clickable.add(relic);
+            }
+        }
+        if (index < 0 || index >= clickable.size()) {
+            throw new InvalidCommandException(tokens, InvalidCommandException.InvalidCommandFormat.OUT_OF_BOUNDS, tokens[1]);
+        }
+        ((ClickableRelic) clickable.get(index)).onRightClick();
+        GameStateListener.registerStateChange();
+    }
+
+    private static void executeDebugCommand(String commandText) throws InvalidCommandException {
+        if (commandText.isEmpty()) {
+            throw new InvalidCommandException(new String[]{"debug"}, InvalidCommandException.InvalidCommandFormat.MISSING_ARGUMENT);
+        }
+        if (commandText.equals("abandon")) {
+            Settings.isTrial = false;
+            Settings.isDailyRun = false;
+            Settings.isEndless = false;
+            CardCrawlGame.trial = null;
+            CardCrawlGame.startOver();
+        } else {
+            // Pass to BaseMod DevConsole
+            basemod.DevConsole.currentText = commandText;
+            basemod.DevConsole.execute();
+        }
+        GameStateListener.registerStateChange();
     }
 
     private static int getKeycode(String keyName) {

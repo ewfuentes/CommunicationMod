@@ -2,6 +2,8 @@ package communicationmod;
 
 import basemod.ReflectionHacks;
 import com.badlogic.gdx.Gdx;
+import com.megacrit.cardcrawl.characters.AbstractPlayer;
+import com.megacrit.cardcrawl.monsters.AbstractMonster;
 import com.megacrit.cardcrawl.cards.AbstractCard;
 import com.megacrit.cardcrawl.cards.CardGroup;
 import com.megacrit.cardcrawl.core.CardCrawlGame;
@@ -35,11 +37,16 @@ import communicationmod.patches.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import basemod.BaseMod;
+import basemod.abstracts.CustomScreen;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
 
 
 public class ChoiceScreenUtils {
@@ -60,6 +67,7 @@ public class ChoiceScreenUtils {
         HAND_SELECT,
         GAME_OVER,
         COMPLETE,
+        CUSTOM_SCREEN,
         NONE
     }
 
@@ -69,8 +77,16 @@ public class ChoiceScreenUtils {
 
     public static ChoiceType getCurrentChoiceType() {
         if (!AbstractDungeon.isScreenUp) {
-            if (AbstractDungeon.getCurrRoom().phase == AbstractRoom.RoomPhase.EVENT || (AbstractDungeon.getCurrRoom().event != null && AbstractDungeon.getCurrRoom().phase == AbstractRoom.RoomPhase.COMPLETE)) {
+            if (AbstractDungeon.getCurrRoom().phase == AbstractRoom.RoomPhase.EVENT
+                    || (AbstractDungeon.getCurrRoom().event != null
+                        && AbstractDungeon.getCurrRoom().phase == AbstractRoom.RoomPhase.COMPLETE
+                        && AbstractDungeon.getCurrRoom().event.hasFocus)) {
                 return ChoiceType.EVENT;
+            } else if (AbstractDungeon.getCurrRoom().event != null
+                    && AbstractDungeon.getCurrRoom().phase == AbstractRoom.RoomPhase.COMPLETE
+                    && !AbstractDungeon.getCurrRoom().event.hasFocus
+                    && hasField(AbstractDungeon.getCurrRoom().event, "merchant")) {
+                return ChoiceType.SHOP_ROOM;
             } else if (AbstractDungeon.getCurrRoom() instanceof TreasureRoomBoss || AbstractDungeon.getCurrRoom() instanceof TreasureRoom) {
                 return ChoiceType.CHEST;
             } else if (AbstractDungeon.getCurrRoom() instanceof ShopRoom) {
@@ -107,6 +123,13 @@ public class ChoiceScreenUtils {
             case NEOW_UNLOCK:
                 return ChoiceType.GAME_OVER;
             default:
+                String screenName = screen.name();
+                if (screenName.equals("MULTI_CHARACTER_SELECT")
+                        || screenName.equals("TARGET_SELECT")
+                        || screenName.equals("ORB_SELECT")
+                        || screenName.equals("RELIC_TRADING")) {
+                    return ChoiceType.CUSTOM_SCREEN;
+                }
                 return ChoiceType.NONE;
         }
     }
@@ -147,6 +170,9 @@ public class ChoiceScreenUtils {
                 break;
             case HAND_SELECT:
                 choices = getHandSelectScreenChoices();
+                break;
+            case CUSTOM_SCREEN:
+                choices = getCustomScreenChoices();
                 break;
             default:
                 return new ArrayList<>();
@@ -194,6 +220,9 @@ public class ChoiceScreenUtils {
             case HAND_SELECT:
                 makeHandSelectScreenChoice(choice_index);
                 return;
+            case CUSTOM_SCREEN:
+                makeCustomScreenChoice(choice_index);
+                return;
             default:
                 logger.info("Unimplemented choice.");
         }
@@ -226,6 +255,8 @@ public class ChoiceScreenUtils {
             case GAME_OVER:
                 return false;
             case COMPLETE:
+                return false;
+            case CUSTOM_SCREEN:
                 return false;
             default:
                 return false;
@@ -312,6 +343,8 @@ public class ChoiceScreenUtils {
                 return true;
             case COMPLETE:
                 return true;
+            case CUSTOM_SCREEN:
+                return isCustomScreenConfirmAvailable();
             default:
                 return false;
         }
@@ -338,6 +371,8 @@ public class ChoiceScreenUtils {
             case GAME_OVER:
                 return "proceed";
             case COMPLETE:
+                return "proceed";
+            case CUSTOM_SCREEN:
                 return "proceed";
             default:
                 return "confirm";
@@ -373,6 +408,10 @@ public class ChoiceScreenUtils {
                 return;
             case COMPLETE:
                 clickProceedButton();
+                return;
+            case CUSTOM_SCREEN:
+                clickProceedButton();
+                return;
         }
     }
 
@@ -797,6 +836,8 @@ public class ChoiceScreenUtils {
             }
         } else if(AbstractDungeon.getCurrRoom().event instanceof GremlinWheelGame) {
             choiceList.add("spin");
+        } else if(AbstractDungeon.getCurrRoom().event.getClass().getName().equals("BoardGame.events.BGGremlinWheelGame")) {
+            choiceList.add("spin");
         } else if(AbstractDungeon.getCurrRoom().event instanceof GremlinMatchGame) {
             ArrayList<AbstractCard> pickableCards = GremlinMatchGamePatch.getOrderedCards();
             for (AbstractCard c : pickableCards) {
@@ -817,6 +858,10 @@ public class ChoiceScreenUtils {
         } else if (AbstractDungeon.getCurrRoom().event instanceof GremlinWheelGame) {
             GremlinWheelGame event = (GremlinWheelGame) AbstractDungeon.getCurrRoom().event;
             ReflectionHacks.setPrivate(event, GremlinWheelGame.class, "buttonPressed", true);
+            CardCrawlGame.sound.play("WHEEL");
+        } else if (AbstractDungeon.getCurrRoom().event.getClass().getName().equals("BoardGame.events.BGGremlinWheelGame")) {
+            ReflectionHacks.setPrivate(AbstractDungeon.getCurrRoom().event,
+                    AbstractDungeon.getCurrRoom().event.getClass(), "buttonPressed", true);
             CardCrawlGame.sound.play("WHEEL");
         } else if (AbstractDungeon.getCurrRoom().event instanceof GremlinMatchGame) {
             ArrayList<AbstractCard> pickable = GremlinMatchGamePatch.getOrderedCards();
@@ -875,6 +920,279 @@ public class ChoiceScreenUtils {
         Settings.isEndless = false;
         CardCrawlGame.trial = null;
         CardCrawlGame.startOver();
+    }
+
+    private static boolean hasField(Object obj, String fieldName) {
+        try {
+            obj.getClass().getDeclaredField(fieldName);
+            return true;
+        } catch (NoSuchFieldException e) {
+            return false;
+        }
+    }
+
+    // --- Board Game mod screen support ---
+
+    private static CustomScreen getMultiCharacterSelectScreen() {
+        if (AbstractDungeon.screen.name().equals("MULTI_CHARACTER_SELECT")) {
+            return BaseMod.getCustomScreen(AbstractDungeon.screen);
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<?> getButtonsFromScreen(CustomScreen screen) {
+        try {
+            Field f = screen.getClass().getDeclaredField("buttons");
+            f.setAccessible(true);
+            return (List<?>) f.get(screen);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static ArrayList<String> getCustomScreenChoices() {
+        ArrayList<String> choices = new ArrayList<>();
+        String screenName = AbstractDungeon.screen.name();
+        if (screenName.equals("MULTI_CHARACTER_SELECT")) {
+            CustomScreen screen = getMultiCharacterSelectScreen();
+            if (screen != null) {
+                List<?> buttons = getButtonsFromScreen(screen);
+                if (buttons != null) {
+                    for (Object button : buttons) {
+                        try {
+                            Field nameField = button.getClass().getDeclaredField("name");
+                            nameField.setAccessible(true);
+                            choices.add(((String) nameField.get(button)).toLowerCase());
+                        } catch (Exception e) {
+                            choices.add("unknown");
+                        }
+                    }
+                }
+            }
+        } else if (screenName.equals("TARGET_SELECT")) {
+            for (AbstractMonster m : AbstractDungeon.getMonsters().monsters) {
+                if (!m.isDeadOrEscaped()) {
+                    choices.add(m.name.toLowerCase());
+                }
+            }
+        } else if (screenName.equals("RELIC_TRADING")) {
+            CustomScreen cs = BaseMod.getCustomScreen(AbstractDungeon.screen);
+            if (cs != null) {
+                try {
+                    Field relicsField = cs.getClass().getDeclaredField("relics");
+                    relicsField.setAccessible(true);
+                    List<?> relics = (List<?>) relicsField.get(cs);
+                    for (Object ftr : relics) {
+                        Field relicField = ftr.getClass().getDeclaredField("realRelic");
+                        relicField.setAccessible(true);
+                        AbstractRelic relic = (AbstractRelic) relicField.get(ftr);
+                        choices.add(relic.name.toLowerCase());
+                    }
+                } catch (Exception e) {
+                    logger.error("Failed to get relic trading choices: " + e.getMessage());
+                }
+            }
+        } else if (screenName.equals("ORB_SELECT")) {
+            CustomScreen cs = BaseMod.getCustomScreen(AbstractDungeon.screen);
+            boolean prohibitDark = false;
+            if (cs != null) {
+                try {
+                    Field f = cs.getClass().getDeclaredField("prohibitDarkOrbs");
+                    f.setAccessible(true);
+                    prohibitDark = (boolean) f.get(cs);
+                } catch (Exception ignored) {}
+            }
+            for (int i = 0; i < AbstractDungeon.player.orbs.size(); i++) {
+                com.megacrit.cardcrawl.orbs.AbstractOrb orb = AbstractDungeon.player.orbs.get(i);
+                if (!(orb instanceof com.megacrit.cardcrawl.orbs.EmptyOrbSlot)
+                        && !orb.ID.equals("Empty")
+                        && !(prohibitDark && orb.ID.equals("BGDark"))) {
+                    choices.add(orb.name.toLowerCase());
+                }
+            }
+        }
+        return choices;
+    }
+
+    private static void makeCustomScreenChoice(int choiceIndex) {
+        String screenName = AbstractDungeon.screen.name();
+        if (screenName.equals("MULTI_CHARACTER_SELECT")) {
+            CustomScreen screen = getMultiCharacterSelectScreen();
+            if (screen != null) {
+                List<?> buttons = getButtonsFromScreen(screen);
+                if (buttons != null && choiceIndex < buttons.size()) {
+                    Object button = buttons.get(choiceIndex);
+                    try {
+                        Field hbField = button.getClass().getDeclaredField("hb");
+                        hbField.setAccessible(true);
+                        Hitbox hb = (Hitbox) hbField.get(button);
+                        hb.clicked = true;
+                    } catch (Exception e) {
+                        logger.error("Failed to click custom screen button: " + e.getMessage());
+                    }
+                }
+            }
+        } else if (screenName.equals("TARGET_SELECT")) {
+            ArrayList<AbstractMonster> targets = new ArrayList<>();
+            for (AbstractMonster m : AbstractDungeon.getMonsters().monsters) {
+                if (!m.isDeadOrEscaped()) {
+                    targets.add(m);
+                }
+            }
+            if (choiceIndex < targets.size()) {
+                AbstractMonster target = targets.get(choiceIndex);
+                // Directly invoke the target select action and close the screen,
+                // bypassing the hitbox/click system which resets every frame.
+                CustomScreen cs = BaseMod.getCustomScreen(AbstractDungeon.screen);
+                if (cs != null) {
+                    try {
+                        Field isDoneField = cs.getClass().getDeclaredField("isDone");
+                        isDoneField.setAccessible(true);
+                        Field actionField = cs.getClass().getDeclaredField("action");
+                        actionField.setAccessible(true);
+                        if (!(boolean) isDoneField.get(cs)) {
+                            isDoneField.set(cs, true);
+                            Object action = actionField.get(cs);
+                            // action is a TargetSelectAction — find execute method on interfaces
+                            Method executeMethod = null;
+                            for (Class<?> iface : action.getClass().getInterfaces()) {
+                                try {
+                                    executeMethod = iface.getMethod("execute", AbstractMonster.class);
+                                    break;
+                                } catch (NoSuchMethodException ignored) {}
+                            }
+                            if (executeMethod == null) {
+                                // Try all declared methods
+                                for (Method m : action.getClass().getDeclaredMethods()) {
+                                    if (m.getName().equals("execute") && m.getParameterCount() == 1) {
+                                        executeMethod = m;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (executeMethod != null) {
+                                executeMethod.setAccessible(true);
+                                executeMethod.invoke(action, target);
+                                logger.info("Target select executed on: " + target.name);
+                            } else {
+                                logger.error("Could not find execute method on TargetSelectAction");
+                            }
+                        }
+                        AbstractDungeon.player.inSingleTargetMode = false;
+                        AbstractDungeon.closeCurrentScreen();
+                    } catch (Exception e) {
+                        logger.error("Failed to execute target select: " + e.getMessage());
+                        e.printStackTrace();
+                    }
+                }
+            }
+        } else if (screenName.equals("RELIC_TRADING")) {
+            CustomScreen cs = BaseMod.getCustomScreen(AbstractDungeon.screen);
+            if (cs != null) {
+                try {
+                    Field relicsField = cs.getClass().getDeclaredField("relics");
+                    relicsField.setAccessible(true);
+                    List<?> relics = (List<?>) relicsField.get(cs);
+                    if (choiceIndex < relics.size()) {
+                        Object ftr = relics.get(choiceIndex);
+                        Field relicField = ftr.getClass().getDeclaredField("realRelic");
+                        relicField.setAccessible(true);
+                        AbstractRelic relic = (AbstractRelic) relicField.get(ftr);
+                        // Call onRelicChosen which handles isDone and closing
+                        Method onRelicChosen = cs.getClass().getDeclaredMethod("onRelicChosen", AbstractRelic.class);
+                        onRelicChosen.setAccessible(true);
+                        onRelicChosen.invoke(cs, relic);
+                    }
+                } catch (Exception e) {
+                    logger.error("Failed to execute relic trading: " + e.getMessage());
+                    e.printStackTrace();
+                }
+            }
+        } else if (screenName.equals("ORB_SELECT")) {
+            // Build list of valid orb slot indices
+            CustomScreen cs = BaseMod.getCustomScreen(AbstractDungeon.screen);
+            if (cs != null) {
+                boolean prohibitDark = false;
+                try {
+                    Field f = cs.getClass().getDeclaredField("prohibitDarkOrbs");
+                    f.setAccessible(true);
+                    prohibitDark = (boolean) f.get(cs);
+                } catch (Exception ignored) {}
+
+                ArrayList<Integer> validSlots = new ArrayList<>();
+                for (int i = 0; i < AbstractDungeon.player.orbs.size(); i++) {
+                    com.megacrit.cardcrawl.orbs.AbstractOrb orb = AbstractDungeon.player.orbs.get(i);
+                    if (!(orb instanceof com.megacrit.cardcrawl.orbs.EmptyOrbSlot)
+                            && !orb.ID.equals("Empty")
+                            && !(prohibitDark && orb.ID.equals("BGDark"))) {
+                        validSlots.add(i);
+                    }
+                }
+
+                if (choiceIndex < validSlots.size()) {
+                    int orbSlot = validSlots.get(choiceIndex);
+                    try {
+                        Field isDoneField = cs.getClass().getDeclaredField("isDone");
+                        isDoneField.setAccessible(true);
+                        Field actionField = cs.getClass().getDeclaredField("action");
+                        actionField.setAccessible(true);
+                        if (!(boolean) isDoneField.get(cs)) {
+                            isDoneField.set(cs, true);
+                            Object action = actionField.get(cs);
+                            Method executeMethod = null;
+                            for (Class<?> iface : action.getClass().getInterfaces()) {
+                                try {
+                                    executeMethod = iface.getMethod("execute", int.class);
+                                    break;
+                                } catch (NoSuchMethodException ignored) {}
+                            }
+                            if (executeMethod == null) {
+                                for (Method m : action.getClass().getDeclaredMethods()) {
+                                    if (m.getName().equals("execute") && m.getParameterCount() == 1) {
+                                        executeMethod = m;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (executeMethod != null) {
+                                executeMethod.setAccessible(true);
+                                executeMethod.invoke(action, orbSlot);
+                            }
+                        }
+                        AbstractDungeon.closeCurrentScreen();
+                    } catch (Exception e) {
+                        logger.error("Failed to execute orb select: " + e.getMessage());
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }
+        GameStateListener.registerStateChange();
+    }
+
+    private static boolean isCustomScreenConfirmAvailable() {
+        String screenName = AbstractDungeon.screen.name();
+        if (screenName.equals("MULTI_CHARACTER_SELECT")) {
+            CustomScreen screen = getMultiCharacterSelectScreen();
+            if (screen != null) {
+                List<?> buttons = getButtonsFromScreen(screen);
+                if (buttons != null) {
+                    for (Object button : buttons) {
+                        try {
+                            Field selectedField = button.getClass().getDeclaredField("selected");
+                            selectedField.setAccessible(true);
+                            if ((boolean) selectedField.get(button)) {
+                                return true;
+                            }
+                        } catch (Exception e) {
+                            // continue
+                        }
+                    }
+                }
+            }
+        }
+        return false;
     }
 
 }

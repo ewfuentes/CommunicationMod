@@ -118,17 +118,48 @@ public class GameStateListener {
             return false;
         }
         // We are not ready to receive commands when it is not our turn, except for some pesky screens
-        if (inCombat && (!myTurn || AbstractDungeon.getMonsters().areMonstersBasicallyDead())) {
-            if (!newScreenUp) {
-                return false;
+        if (inCombat && !newScreenUp) {
+            boolean monstersDeadAndIdle = AbstractDungeon.getMonsters().areMonstersBasicallyDead()
+                    && AbstractDungeon.actionManager.actions.isEmpty()
+                    && AbstractDungeon.actionManager.cardQueue.isEmpty();
+            if (monstersDeadAndIdle) {
+                // Monsters are dead and all actions resolved — let state change detection
+                // handle the transition to rewards. Don't block.
+            } else if (!myTurn) {
+                // Fallback for mods that don't trigger EnableEndTurnButtonAction:
+                // if the action manager is idle and waiting on user, treat it as our turn.
+                // Also require the hand to be non-empty to avoid firing before cards are drawn.
+                if (AbstractDungeon.actionManager.phase.equals(GameActionManager.Phase.WAITING_ON_USER)
+                        && AbstractDungeon.actionManager.cardQueue.isEmpty()
+                        && AbstractDungeon.actionManager.actions.isEmpty()
+                        && AbstractDungeon.actionManager.preTurnActions.isEmpty()
+                        && !AbstractDungeon.player.endTurnQueued
+                        && !AbstractDungeon.player.hand.isEmpty()) {
+                    myTurn = true;
+                } else {
+                    return false;
+                }
             }
         }
+        // Board Game mod custom screens are considered stable when up.
+        String screenName = newScreen.name();
+        if (newScreenUp && (screenName.equals("MULTI_CHARACTER_SELECT")
+                || screenName.equals("TARGET_SELECT")
+                || screenName.equals("ORB_SELECT")
+                || screenName.equals("RELIC_TRADING"))) {
+            if (newScreen != previousScreen || externalChange) {
+                return true;
+            }
+            return false;
+        }
         // In event rooms, we need to wait for the event wait timer to reach 0 before we can accurately assess its state.
+        // Skip this check if the event has lost focus (e.g., merchant encounter transformed into shop).
         AbstractRoom currentRoom = AbstractDungeon.getCurrRoom();
         if ((currentRoom instanceof EventRoom
                 || currentRoom instanceof NeowRoom
                 || (currentRoom instanceof VictoryRoom && ((VictoryRoom) currentRoom).eType == VictoryRoom.EventType.HEART))
-                && AbstractDungeon.getCurrRoom().event.waitTimer != 0.0F) {
+                && AbstractDungeon.getCurrRoom().event.waitTimer != 0.0F
+                && AbstractDungeon.getCurrRoom().event.hasFocus) {
             return false;
         }
         // The state has always changed in some way when one of these variables is different.
